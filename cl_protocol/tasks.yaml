@@ -1,0 +1,91 @@
+# ================================================================
+# 持续学习实验协议 · 任务定义（定稿版 2026-08-04）
+# 平台：stable-worldmodel（pip 0.1.1 + 仓库 main 快照）
+#
+# 本文件是全套实验的唯一事实来源：
+#   collect_task.py  —— 按任务定义采集漂移数据
+#   eval_task.py     —— 按任务定义注入漂移并调用官方评估
+#   pred_error.py    —— 按任务定义计算留出轨迹预测误差
+#
+# 所有 variation 键名与取值范围均已对照 stable_worldmodel 源码核实：
+#   PushT  (envs/pusht/env.py)        Reacher (envs/dmcontrol/reacher.py)
+#   goal.position   ∈ [50, 450]       agent.arm_density    ∈ [500, 1500]
+#   block.scale     ∈ [20, 60]        agent.finger_density ∈ [500, 1500]
+#   block.color     = RGB uint8
+# ================================================================
+
+sequences:
+
+  # ---------------- 序列 A：PushT，目标/视觉漂移 ----------------
+  A_pusht:
+    env: swm/PushT-v1
+    eval_config: pusht            # scripts/plan/eval_wm.py --config-name pusht
+    train_data_config: pusht      # scripts/train/lewm.py data=pusht（T1 用官方专家数据）
+    results_file: pusht_results.txt
+    max_episode_steps: 200
+    collect_policy: weak          # T2/T3 用 WeakPolicy(dist_constraint=100) 采集
+    tasks:
+
+      T1:
+        desc: 默认任务（goal=[256,256]，标准光照），官方专家数据，不采集
+        dataset: pusht_expert_train.lance
+        variation_values: {}
+        darken: 1.0
+
+      T2:
+        desc: 目标点漂移到左上角 [100,100] + 暗光（亮度×0.5，对齐 AdaJEPA 暗光漂移）
+        dataset: pusht_t2.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [100, 100]
+        darken: 0.5
+
+      T3:
+        desc: 目标点 [100,400] + 方块变大（scale 40→55）+ 方块变红
+        dataset: pusht_t3.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [100, 400]
+          block.scale: 55
+          block.color: [255, 0, 0]
+        darken: 1.0
+
+  # ---------------- 序列 B：Reacher，动力学漂移 ----------------
+  B_reacher:
+    env: swm/ReacherDMControl-v0
+    eval_config: reacher          # scripts/plan/eval_wm.py --config-name reacher
+    train_data_config: dmc        # scripts/train/lewm.py data=dmc
+    results_file: dmc_results.txt
+    max_episode_steps: 200
+    collect_policy: random        # RandomPolicy（与 T1 一致）
+    tasks:
+
+      T1:
+        desc: 默认密度（arm=1000, finger=1000）——已完成采集/训练/评估（84%）
+        dataset: dmc/reacher_random.lance
+        variation_values: {}
+        darken: 1.0
+
+      T2:
+        desc: 手臂密度 1000→700（手臂变轻，动力学漂移）
+        dataset: dmc/reacher_t2.lance
+        collect_episodes: 500
+        variation_values:
+          agent.arm_density: [700.0]     # 注意保持列表形式（空间 shape=(1,)）
+        darken: 1.0
+
+      T3:
+        desc: 手臂密度→500（空间下限，强漂移）+ 手指密度→700（复合漂移）
+        dataset: dmc/reacher_t3.lance
+        collect_episodes: 500
+        variation_values:
+          agent.arm_density: [500.0]     # 恰在下限；若 contains 检查报错就改 [505.0]
+          agent.finger_density: [700.0]
+        darken: 1.0
+
+# ---------------- 留出测试集（预测误差遗忘度量用） ----------------
+heldout:
+  reserve_last_episodes: 200      # 默认取每个数据集最后 200 条做留出评估
+  # 注意：T1 的最后 200 条参与过训练，绝对误差会偏乐观，
+  # 跨任务/跨检查点的差值仍有意义。正式跑建议为每个任务单独采
+  # 200 条专用测试集（fill in dataset_test 后 pred_error 优先使用）。

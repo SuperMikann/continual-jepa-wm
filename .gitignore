@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pt
+*.ckpt
+*.lance
+*.log
+.DS_Store
