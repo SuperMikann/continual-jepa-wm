@@ -5,7 +5,7 @@
 > one model learns a sequence of drifting tasks, and we measure / mitigate catastrophic
 > forgetting of planning ability on earlier tasks.
 
-硕士论文项目代码仓库。在 JEPA 类潜在世界模型（LeWorldModel）上做**持续学习**：一个模型依次学习多个发生受控漂移的任务，要求新任务学得动（适应性）、旧任务规划能力不退（保持性）。
+项目代码仓库。在 JEPA 类潜在世界模型（LeWorldModel）上做**持续学习**：一个模型依次学习多个发生受控漂移的任务，要求新任务学得动（适应性）、旧任务规划能力不退（保持性）。
 
 ## 任务序列
 
