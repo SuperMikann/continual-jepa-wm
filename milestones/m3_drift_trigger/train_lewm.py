@@ -99,6 +99,37 @@ def lejepa_forward(self, batch, stage, cfg):
     output['sigreg_loss'] = self.sigreg(emb.transpose(0, 1))
     output['loss'] = output['pred_loss'] + lambd * output['sigreg_loss']
 
+    # [子空间正则] L_sub（idea 式 10/11；Sub-JEPA 原版语义：J 个冻结随机
+    # 正交子空间投影 P_j 作用在编码器嵌入 z 上，约束子空间内均值→0、
+    # 协方差→I，比全空间高斯约束柔和。定位：M3 归因「T1 漂移残余通道 =
+    # 编码器」的正面对决实验。用法：+loss.sub_weight=0.1）
+    # 投影矩阵固定种子生成、首次使用时懒建——不进 state_dict，
+    # 不改变检查点格式，warm_start 兼容性和之前完全一致
+    w_sub = cfg.loss.get('sub_weight', 0.0)
+    if w_sub > 0:
+        sub_P = getattr(self, '_sub_P', None)
+        J = int(cfg.loss.get('sub_num', 16))   # Sub-JEPA PushT 配置
+        ds = int(cfg.loss.get('sub_dim', 12))  # 192/16
+        d = emb.size(-1)
+        if sub_P is None or sub_P.size(-1) != d:
+            g = torch.Generator().manual_seed(42)
+            Q, _ = torch.linalg.qr(
+                torch.randn(d, J * ds, generator=g)
+            )  # (d, J*ds) 列正交
+            sub_P = Q.T.reshape(J, ds, d)  # (J, ds, d)，行正交
+            self._sub_P = sub_P
+        sub_P = self._sub_P.to(emb.device)
+        z = emb.reshape(-1, d).float()                      # (N, d)
+        u = torch.einsum('nd,jsd->njs', z, sub_P)           # (N, J, ds)
+        mu = u.mean(dim=0)                                  # (J, ds)
+        uc = u - mu
+        cov = torch.einsum('njs,njt->jst', uc, uc) / max(1, u.size(0) - 1)
+        eye = torch.eye(ds, device=emb.device)
+        output['sub_loss'] = (
+            mu.pow(2).sum(-1) + (cov - eye).pow(2).sum((-2, -1))
+        ).mean()
+        output['loss'] = output['loss'] + w_sub * output['sub_loss']
+
     # [差分动力学] DiffPredictor 附加损失（idea 式 17/18；原版 Predictor 无此属性，自动跳过）
     pred_module = getattr(self.model, 'predictor', None)
     last_delta = getattr(pred_module, 'last_delta', None)
