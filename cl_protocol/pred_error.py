@@ -126,8 +126,8 @@ def main():
     ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
     ap.add_argument('--policy', required=True,
                     help='检查点（checkpoints/ 下的相对路径，如 lewm_reacher/weights_epoch_30.pt）')
-    ap.add_argument('--tasks', nargs='+', choices=['T1', 'T2', 'T3'],
-                    help='只算这些任务（默认全部）')
+    ap.add_argument('--tasks', nargs='+',
+                    help='只算这些任务（默认全部链任务，可选探针档位）')
     ap.add_argument('--reserve-last', type=int, default=200,
                     help='取每个数据集最后多少条做留出集（默认 200）')
     ap.add_argument('--windows', type=int, default=1000, help='每任务采样窗口数')
@@ -145,10 +145,15 @@ def main():
     model.requires_grad_(False)
     print(f'[模型] {args.policy} 已加载（{device}）')
 
+    # 链任务 + 探针档位（probe_tasks，批注 2 剂量-响应用）合并查找；
+    # 默认仍只迭代链任务
+    all_tasks = {**seq['tasks'], **seq.get('probe_tasks', {})}
     task_names = args.tasks or list(seq['tasks'].keys())
     results = {}
     for task_name in task_names:
-        task = seq['tasks'][task_name]
+        if task_name not in all_tasks:
+            raise KeyError(f'未知任务 {task_name}，可用: {sorted(all_tasks)}')
+        task = all_tasks[task_name]
         dataset = swm.data.load_dataset(
             task['dataset'], keys_to_cache=['pixels', 'action']
         )

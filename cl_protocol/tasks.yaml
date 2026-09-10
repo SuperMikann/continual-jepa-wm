@@ -50,6 +50,30 @@ sequences:
           block.color: [255, 0, 0]
         darken: 1.0
 
+    # ---------------- 探针档位（回应批注 2：剂量-响应分析，非 CL 链任务） ----------------
+    # 仅做 zero-shot 测量（pred_error / 行为 / 触发分数），不进微调链；
+    # 各脚本通过 {**tasks, **probe_tasks} 合并查找，矩阵模式默认仍只迭代 tasks
+    probe_tasks:
+      # 纯亮度梯度（目标不动，隔离视觉漂移）：T1 亮度 1.0，现有 T2 = 0.5+目标漂移（混淆项）
+      T2b80:
+        desc: 探针档：仅暗光×0.8（目标不动）
+        dataset: pusht_t2b80.lance
+        collect_episodes: 500
+        variation_values: {}
+        darken: 0.8
+      T2b65:
+        desc: 探针档：仅暗光×0.65（目标不动）
+        dataset: pusht_t2b65.lance
+        collect_episodes: 500
+        variation_values: {}
+        darken: 0.65
+      T2b35:
+        desc: 探针档：仅暗光×0.35（目标不动）
+        dataset: pusht_t2b35.lance
+        collect_episodes: 500
+        variation_values: {}
+        darken: 0.35
+
   # ---------------- 序列 B：Reacher，动力学漂移 ----------------
   B_reacher:
     env: swm/ReacherDMControl-v0
@@ -81,6 +105,26 @@ sequences:
         variation_values:
           agent.arm_density: [500.0]     # 恰在下限；若 contains 检查报错就改 [505.0]
           agent.finger_density: [700.0]
+        darken: 1.0
+
+    # ---------------- 探针档位（回应批注 2：剂量-响应分析，非 CL 链任务） ----------------
+    # 仅做 zero-shot 测量（pred_error / 行为 / 触发分数），不进微调链；
+    # 各脚本通过 {**tasks, **probe_tasks} 合并查找，矩阵模式默认仍只迭代 tasks
+    probe_tasks:
+      # 纯密度梯度（只动手臂密度）：T1=1000，现有 T2=700、T3=500+finger 复合
+      T2d850:
+        desc: 探针档：手臂密度 850（弱漂移）
+        dataset: dmc/reacher_t2d850.lance
+        collect_episodes: 500
+        variation_values:
+          agent.arm_density: [850.0]
+        darken: 1.0
+      T2d550:
+        desc: 探针档：手臂密度 550（中强漂移）
+        dataset: dmc/reacher_t2d550.lance
+        collect_episodes: 500
+        variation_values:
+          agent.arm_density: [550.0]
         darken: 1.0
 
 # ---------------- 留出测试集（预测误差遗忘度量用） ----------------

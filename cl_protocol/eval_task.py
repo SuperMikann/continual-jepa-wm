@@ -66,7 +66,11 @@ def run_cell(args, task_name):
     import runpy
 
     seq = load_seq(args.tasks, args.sequence)
-    task = seq['tasks'][task_name]
+    # 链任务 + 探针档位（probe_tasks）合并查找
+    all_tasks = {**seq['tasks'], **seq.get('probe_tasks', {})}
+    if task_name not in all_tasks:
+        sys.exit(f'[拒绝] 未知任务 {task_name}，可用: {sorted(all_tasks)}')
+    task = all_tasks[task_name]
     vv = task.get('variation_values') or {}
     darken = task.get('darken', 1.0)
 
@@ -156,12 +160,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tasks', default=str(Path(__file__).parent / 'tasks.yaml'))
     ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
-    ap.add_argument('--task', choices=['T1', 'T2', 'T3'], help='单格模式：评估哪个任务')
+    ap.add_argument('--task', help='单格模式：评估哪个任务（T1/T2/T3 或探针档位）')
     ap.add_argument('--policy', help='单格模式：检查点（checkpoints/ 下的相对路径）')
     ap.add_argument('--matrix', action='store_true', help='矩阵模式')
     ap.add_argument('--policies', nargs='+', help='矩阵模式：检查点列表')
-    ap.add_argument('--tasks-sel', nargs='+', choices=['T1', 'T2', 'T3'],
-                    help='矩阵模式：只评这些任务（默认全部）')
+    ap.add_argument('--tasks-sel', nargs='+',
+                    help='矩阵模式：只评这些任务（默认全部链任务，可选探针档位）')
     ap.add_argument('--num-eval', type=int, default=50)
     ap.add_argument('--seed', type=int, default=42)
     ap.add_argument('--eval-wm', default='scripts/plan/eval_wm.py',

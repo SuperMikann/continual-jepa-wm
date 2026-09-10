@@ -68,8 +68,8 @@ def main():
     ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
     ap.add_argument('--policy-a', required=True, help='链首检查点（如 T1 训完）')
     ap.add_argument('--policy-b', required=True, help='链尾检查点（如 T3 训完）')
-    ap.add_argument('--task', default='T1', choices=['T1', 'T2', 'T3'],
-                    help='在哪个任务的留出集上测（默认 T1）')
+    ap.add_argument('--task', default='T1',
+                    help='在哪个任务的留出集上测（默认 T1，可选探针档位）')
     ap.add_argument('--reserve-last', type=int, default=200)
     ap.add_argument('--frames', type=int, default=2000, help='采样帧数')
     ap.add_argument('--batch', type=int, default=64)
@@ -81,7 +81,8 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     dataset = swm.data.load_dataset(
-        seq['tasks'][args.task]['dataset'], keys_to_cache=['pixels']
+        {**seq['tasks'], **seq.get('probe_tasks', {})}[args.task]['dataset'],
+        keys_to_cache=['pixels']
     )
     col = episode_col(dataset)
     ep_arr = dataset.get_col_data(col)

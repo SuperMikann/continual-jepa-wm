@@ -54,10 +54,10 @@ def main():
     ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
     ap.add_argument('--policy', required=True,
                     help='检查点（checkpoints/ 下的相对路径）')
-    ap.add_argument('--ref-task', required=True, choices=['T1', 'T2', 'T3'],
-                    help='参考任务（通常为刚训完的任务）')
-    ap.add_argument('--probe-task', required=True, choices=['T1', 'T2', 'T3'],
-                    help='探测任务（通常为下一个待学任务）')
+    ap.add_argument('--ref-task', required=True,
+                    help='参考任务（链任务或探针档位，通常为刚训完的任务）')
+    ap.add_argument('--probe-task', required=True,
+                    help='探测任务（链任务或探针档位，通常为下一个待学任务）')
     ap.add_argument('--tau', type=float, default=1.15, help='触发阈值（预注册 1.15）')
     ap.add_argument('--reserve-last', type=int, default=200)
     ap.add_argument('--windows', type=int, default=1000)
@@ -75,11 +75,17 @@ def main():
     model.requires_grad_(False)
     print(f'[模型] {args.policy} 已加载（{device}）')
 
+    # 链任务 + 探针档位（probe_tasks）合并查找
+    all_tasks = {**seq['tasks'], **seq.get('probe_tasks', {})}
+    for name in (args.ref_task, args.probe_task):
+        if name not in all_tasks:
+            raise KeyError(f'未知任务 {name}，可用: {sorted(all_tasks)}')
+
     err_ref, std_ref, n_ref = task_error(
-        model, seq['tasks'][args.ref_task], args, device
+        model, all_tasks[args.ref_task], args, device
     )
     err_probe, std_probe, n_probe = task_error(
-        model, seq['tasks'][args.probe_task], args, device
+        model, all_tasks[args.probe_task], args, device
     )
     s = err_probe / err_ref
     triggered = s > args.tau

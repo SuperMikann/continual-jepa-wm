@@ -37,8 +37,11 @@ def load_task(tasks_path, seq_name, task_name):
     with open(tasks_path, encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
     seq = cfg['sequences'][seq_name]
-    task = seq['tasks'][task_name]
-    return seq, task
+    # 链任务 + 探针档位（probe_tasks，批注 2 剂量-响应用）合并查找
+    tasks = {**seq['tasks'], **seq.get('probe_tasks', {})}
+    if task_name not in tasks:
+        sys.exit(f'[拒绝] 未知任务 {task_name}，可用: {sorted(tasks)}')
+    return seq, tasks[task_name]
 
 
 def make_policy(kind, seed):
@@ -73,7 +76,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tasks', default=str(Path(__file__).parent / 'tasks.yaml'))
     ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
-    ap.add_argument('--task', required=True, choices=['T1', 'T2', 'T3'])
+    ap.add_argument('--task', required=True,
+                    help='任务名（链任务 T1/T2/T3 或 probe_tasks 里的探针档位）')
     ap.add_argument('--episodes', type=int, default=None, help='覆盖 yaml 里的 collect_episodes')
     ap.add_argument('--seed', type=int, default=3072)
     ap.add_argument('--num-envs', type=int, default=10)
