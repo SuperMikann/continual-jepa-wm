@@ -74,6 +74,74 @@ sequences:
         variation_values: {}
         darken: 0.35
 
+      # ---- 单变量梯度（回应批注 6：位置/大小/颜色分开，幅度放缓） ----
+      # 位置轴（只动 goal，默认 [256,256]）
+      T2g200:
+        desc: 探针档：仅目标点→[200,200]
+        dataset: pusht_t2g200.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [200, 200]
+        darken: 1.0
+      T2g150:
+        desc: 探针档：仅目标点→[150,150]
+        dataset: pusht_t2g150.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [150, 150]
+        darken: 1.0
+      T2g100:
+        desc: 探针档：仅目标点→[100,100]（=T2 的位置分量，无暗光）
+        dataset: pusht_t2g100.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [100, 100]
+        darken: 1.0
+      # 大小轴（只动 block.scale，默认 40，范围 [20,60]）
+      T2s45:
+        desc: 探针档：仅方块 scale→45
+        dataset: pusht_t2s45.lance
+        collect_episodes: 500
+        variation_values:
+          block.scale: 45
+        darken: 1.0
+      T2s50:
+        desc: 探针档：仅方块 scale→50
+        dataset: pusht_t2s50.lance
+        collect_episodes: 500
+        variation_values:
+          block.scale: 50
+        darken: 1.0
+      T2s55:
+        desc: 探针档：仅方块 scale→55（=T3 的尺寸分量，无目标/颜色漂移）
+        dataset: pusht_t2s55.lance
+        collect_episodes: 500
+        variation_values:
+          block.scale: 55
+        darken: 1.0
+      # 颜色轴（只动 block.color，默认 LightSlateGray(119,136,153)，渐变为深绿）
+      T2c1:
+        desc: 探针档：仅方块颜色→[80,140,110]（灰绿微调）
+        dataset: pusht_t2c1.lance
+        collect_episodes: 500
+        variation_values:
+          block.color: [80, 140, 110]
+        darken: 1.0
+      T2c2:
+        desc: 探针档：仅方块颜色→[30,145,60]（中绿）
+        dataset: pusht_t2c2.lance
+        collect_episodes: 500
+        variation_values:
+          block.color: [30, 145, 60]
+        darken: 1.0
+      T2c3:
+        desc: 探针档：仅方块颜色→[0,150,0]（深绿，老师建议的缓幅度上限）
+        dataset: pusht_t2c3.lance
+        collect_episodes: 500
+        variation_values:
+          block.color: [0, 150, 0]
+        darken: 1.0
+
   # ---------------- 序列 B：Reacher，动力学漂移 ----------------
   B_reacher:
     env: swm/ReacherDMControl-v0
