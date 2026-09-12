@@ -74,6 +74,14 @@ sequences:
         variation_values: {}
         darken: 0.35
 
+      # T1 内容 × T2 方言（接口分离臂用）：仅暗光×0.5、标记不动
+      T2b50:
+        desc: 探针档：仅暗光×0.5（目标不动）——T1 内容的 T2 视觉风格版
+        dataset: pusht_t2b50.lance
+        collect_episodes: 500
+        variation_values: {}
+        darken: 0.5
+
       # ---- 单变量梯度（回应批注 6：位置/大小/颜色分开，幅度放缓） ----
       # 位置轴（只动 goal，默认 [256,256]）
       T2g200:
