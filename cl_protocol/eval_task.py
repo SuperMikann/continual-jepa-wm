@@ -84,11 +84,18 @@ def run_cell(args, task_name):
         image_transform=make_darken(darken),
     )
 
+    # 数据集覆盖（审计用）：--eval-dataset 让初始状态与 goal 图像来自
+    # 另一个数据集（如干净专家集），环境仍按 task 漂移——用于分离
+    # 「goal 图像 off-manifold」与「动力学模型失效」两种悬崖机制
+    eval_dataset = args.eval_dataset or task['dataset']
+    if eval_dataset != task['dataset']:
+        print(f'[审计] 数据集覆盖: {task["dataset"]} -> {eval_dataset}（漂移不变）')
+
     sys.argv = [
         'eval_wm.py',
         '--config-name', seq['eval_config'],
         f'policy={args.policy}',
-        f'eval.dataset_name={task["dataset"]}',
+        f'eval.dataset_name={eval_dataset}',
         f'eval.num_eval={args.num_eval}',
         f'seed={args.seed}',
         *(args.extra or []),
@@ -172,6 +179,8 @@ def main():
                     help='官方评估脚本路径（默认假设在仓库根目录运行）')
     ap.add_argument('--extra', action='append',
                     help='追加给 eval_wm.py 的 hydra 覆盖，可多次：--extra bf16=true')
+    ap.add_argument('--eval-dataset', default=None,
+                    help='审计用：覆盖评估数据集（初始状态/goal 来源），环境漂移不变')
     args = ap.parse_args()
 
     if args.matrix:
