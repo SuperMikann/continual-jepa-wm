@@ -119,6 +119,14 @@ sequences:
         variation_values:
           block.scale: 55
         darken: 1.0
+      # 空操作对照（审计用）：goal 设为默认值，注入非空 variation 但漂移量为零
+      # 若行为照样崩 → 注入路径/评估有 artifact；若正常 → 敏感性为真
+      T2noop:
+        desc: 探针档：空操作对照（goal 设默认值 [256,256]，其余不动）
+        dataset: pusht_expert_train.lance
+        variation_values:
+          goal.position: [256, 256]
+        darken: 1.0
       # 颜色轴（只动 block.color，默认 LightSlateGray(119,136,153)，渐变为深绿）
       T2c1:
         desc: 探针档：仅方块颜色→[80,140,110]（灰绿微调）
