@@ -82,6 +82,26 @@ sequences:
         variation_values: {}
         darken: 0.5
 
+      # 链终点接口分离臂（T1/T2 内容 × T3 方言：红+scale55+亮画面，目标点还原）
+      T1x3:
+        desc: 探针档：T1 内容×T3 方言（goal 还原 [256,256]，scale 55+红+亮）
+        dataset: pusht_t1x3.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [256, 256]
+          block.scale: 55
+          block.color: [255, 0, 0]
+        darken: 1.0
+      T2x3:
+        desc: 探针档：T2 内容×T3 方言（goal 还原 [100,100]，scale 55+红+亮）
+        dataset: pusht_t2x3.lance
+        collect_episodes: 500
+        variation_values:
+          goal.position: [100, 100]
+          block.scale: 55
+          block.color: [255, 0, 0]
+        darken: 1.0
+
       # ---- 单变量梯度（回应批注 6：位置/大小/颜色分开，幅度放缓） ----
       # 位置轴（只动 goal，默认 [256,256]）
       T2g200:
