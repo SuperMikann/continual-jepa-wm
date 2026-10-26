@@ -1,7 +1,33 @@
-__pycache__/
-*.pyc
+# ========== 大体量数据与权重（不进版本控制） ==========
+.stable_worldmodel/
+datasets/
+lewm_baseline/
+baseline_results/
+*.tar.gz
+*.zip
+*.tgz
+*.lance
 *.pt
 *.ckpt
-*.lance
-*.log
-.DS_Store
+
+# ========== 上游代码 / 嵌套 git 仓库（自行管理） ==========
+continual-jepa-wm/
+stable-worldmodel-main/
+
+# ========== Python / 系统缓存 ==========
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
+
+# Explicit installer backups (local only)
+.code_backups/
+
+# Public source repository: local evidence and personal material stay outside Git
+results/
+logs/
+outputs/
+AGENTS.md
+实验记录.md
+*.docx
+archive/protocol_notes_before_cleanup.md

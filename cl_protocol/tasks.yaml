@@ -102,6 +102,24 @@ sequences:
           block.color: [255, 0, 0]
         darken: 1.0
 
+      # 纯测试集（评估卫生：采完封存，永不进训练管线；与正链同漂移、同策略）
+      T2_test:
+        desc: 纯测试集：T2 同款漂移（goal[100,100]+暗光×0.5），200 条，仅评估
+        dataset: pusht_t2_test.lance
+        collect_episodes: 200
+        variation_values:
+          goal.position: [100, 100]
+        darken: 0.5
+      T3_test:
+        desc: 纯测试集：T3 同款漂移（goal[100,400]+scale55+红），200 条，仅评估
+        dataset: pusht_t3_test.lance
+        collect_episodes: 200
+        variation_values:
+          goal.position: [100, 400]
+          block.scale: 55
+          block.color: [255, 0, 0]
+        darken: 1.0
+
       # ---- 单变量梯度（回应批注 6：位置/大小/颜色分开，幅度放缓） ----
       # 位置轴（只动 goal，默认 [256,256]）
       T2g200:
@@ -229,6 +247,87 @@ sequences:
         collect_episodes: 500
         variation_values:
           agent.arm_density: [550.0]
+        darken: 1.0
+
+      # 纯测试集（与正链同漂移、同策略，采完封存仅评估）
+      T2_test:
+        desc: 纯测试集：T2 同款（手臂密度 700），200 条，仅评估
+        dataset: dmc/reacher_t2_test.lance
+        collect_episodes: 200
+        variation_values:
+          agent.arm_density: [700.0]
+        darken: 1.0
+      T3_test:
+        desc: 纯测试集：T3 同款（手臂 500+手指 700），200 条，仅评估
+        dataset: dmc/reacher_t3_test.lance
+        collect_episodes: 200
+        variation_values:
+          agent.arm_density: [500.0]
+          agent.finger_density: [700.0]
+        darken: 1.0
+
+  # ---------------- 序列 C：Walker，动力学漂移（批注 3，ODRL 式单变量） ----------------
+  C_walker:
+    env: swm/WalkerDMControl-v0
+    eval_config: walker
+    train_data_config: dmc
+    results_file: dmc_results.txt
+    max_episode_steps: 200
+    collect_policy: random
+    tasks:
+
+      T1:
+        desc: 默认（摩擦 1.0、重力 z=-9.81、密度 1000）
+        dataset: dmc/walker_expert.lance
+        variation_values: {}
+        darken: 1.0
+
+      T2:
+        desc: 地面摩擦 1.0→0.3（单变量，ODRL 式动力学漂移）
+        dataset: dmc/walker_t2.lance
+        collect_episodes: 500
+        variation_values:
+          floor.friction: [0.3]
+        darken: 1.0
+
+      T3:
+        desc: 重力 z -9.81→-4.9（单变量，重力减半）
+        dataset: dmc/walker_t3.lance
+        collect_episodes: 500
+        variation_values:
+          gravity.z: [-4.9]
+        darken: 1.0
+
+  # ---------------- 序列 D：Cheetah，同构 ----------------
+  D_cheetah:
+    env: swm/CheetahDMControl-v0
+    eval_config: cheetah
+    train_data_config: dmc
+    results_file: dmc_results.txt
+    max_episode_steps: 200
+    collect_policy: random
+    tasks:
+
+      T1:
+        desc: 默认（摩擦 1.0、重力 z=-9.81、密度 1000）
+        dataset: dmc/cheetah_expert.lance
+        variation_values: {}
+        darken: 1.0
+
+      T2:
+        desc: 地面摩擦 1.0→0.3（单变量）
+        dataset: dmc/cheetah_t2.lance
+        collect_episodes: 500
+        variation_values:
+          floor.friction: [0.3]
+        darken: 1.0
+
+      T3:
+        desc: 重力 z -9.81→-4.9（单变量）
+        dataset: dmc/cheetah_t3.lance
+        collect_episodes: 500
+        variation_values:
+          gravity.z: [-4.9]
         darken: 1.0
 
 # ---------------- 留出测试集（预测误差遗忘度量用） ----------------

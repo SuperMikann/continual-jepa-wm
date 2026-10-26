@@ -38,6 +38,37 @@ import stable_worldmodel as swm
 from drift_world import DriftWorld, make_darken
 
 
+class ManifestWorld(DriftWorld):
+    """Use an explicit held-out scene list, bypassing native random scene selection."""
+    def __init__(self, *args, scene_manifest, scene_result, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scene_manifest = json.loads(Path(scene_manifest).read_text())
+        self.scene_result = Path(scene_result)
+
+    def evaluate(self, *args, **kwargs):
+        manifest = self.scene_manifest
+        dataset = kwargs['dataset']
+        if list(map(int, dataset.lengths)) != manifest['episode_lengths']:
+            raise ValueError('Evaluation dataset does not match scene manifest')
+        if (kwargs['goal_offset'] != manifest['goal_offset'] or
+                kwargs['eval_budget'] != manifest['eval_budget']):
+            raise ValueError('Evaluation horizon/budget changed')
+        scenes = manifest['scenes']
+        if len(scenes) != self.num_envs:
+            raise ValueError('Scene count differs from environment count')
+        kwargs['episodes_idx'] = [s['episode_idx'] for s in scenes]
+        kwargs['start_steps'] = [s['start_step'] for s in scenes]
+        result = super().evaluate(*args, **kwargs)
+        successes = [bool(x) for x in result['episode_successes']]
+        if len(successes) != len(scenes):
+            raise ValueError('Missing per-scene results')
+        receipt = dict(status='complete', scenes=scenes, successes=successes,
+                       success_rate=100 * sum(successes) / len(successes),
+                       goal_offset=manifest['goal_offset'], eval_budget=manifest['eval_budget'])
+        self.scene_result.write_text(json.dumps(receipt, indent=2) + '\n')
+        return result
+
+
 def load_seq(tasks_path, seq_name):
     with open(tasks_path, encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
@@ -50,15 +81,87 @@ def results_file_for(seq, policy):
     return ckpt_dir / policy / '..' / seq['results_file']
 
 
-def read_last_success_rate(path):
-    """从结果文件读最后一次评估的 success_rate（文件是 append 模式）。"""
-    text = Path(path).resolve().read_text(encoding='utf-8')
-    # metrics dict 里含 numpy 数组（episode_successes/seeds），不能直接 literal_eval，
-    # 只抽 success_rate 标量
-    hits = re.findall(r"'success_rate': ([\d.eE+-]+)", text)
-    if not hits:
-        raise RuntimeError(f'结果文件里没有 success_rate: {path}')
-    return float(hits[-1])
+def read_fresh_success_rate(path, offset, args, dataset):
+    """Validate the result appended by this invocation, never an older score."""
+    path = Path(path).resolve()
+    with path.open('rb') as f:
+        f.seek(offset)
+        text = f.read().decode('utf-8')
+    blocks = text.split('==== CONFIG ====')
+    if len(blocks) != 2 or '==== RESULTS ====' not in blocks[1]:
+        raise RuntimeError('本次评估未写入唯一完整的新结果，拒绝读取历史成绩')
+    config_text, result = blocks[1].split('==== RESULTS ====', 1)
+    cfg = yaml.safe_load(config_text)
+    canonical = lambda p: str(p).replace('\\', '/').split('/checkpoints/')[-1]
+    actual = (canonical(cfg['policy']), cfg['eval']['dataset_name'],
+              cfg['eval']['num_eval'], cfg['seed'])
+    expected = (canonical(args.policy), dataset, args.num_eval, args.seed)
+    if actual != expected:
+        raise RuntimeError(f'新结果配置不符: {actual!r} != {expected!r}')
+    hits = re.findall(r"'success_rate':\s*([\d.eE+-]+)", result)
+    flags = re.search(r"'episode_successes':\s*array\(\[([\s\S]*?)\]", result)
+    if len(hits) != 1 or flags is None:
+        raise RuntimeError('新结果缺少唯一成功率或逐回合成功记录')
+    success = float(hits[0])
+    episodes = re.findall(r'\b(?:True|False)\b', flags.group(1))
+    if (len(episodes) != args.num_eval or not 0 <= success <= 100 or
+            abs(success - 100 * episodes.count('True') / args.num_eval) > 1e-7):
+        raise RuntimeError('新结果回合数或成功率与逐回合记录不一致')
+    return success
+
+
+def install_model_protocol(args):
+    """给完整旧通路诊断显式选条件，并锁定模型实际使用的动作坐标。
+
+    在原生 WorldModelPolicy 构造时替换 process['action']；起点/目标不变。
+    返回恢复函数与运行收据，避免在当前进程遗留全局替换。
+    """
+    native_load = swm.wm.utils.load_pretrained
+    native_policy = swm.policy.WorldModelPolicy
+    condition = getattr(args, 'condition_branch', None)
+    stats_path = getattr(args, 'action_stats', None)
+    state = {'condition': condition, 'normalization': None}
+    fixed = None
+    if stats_path:
+        from stable_worldmodel.wm.lewm.module import FixedActionNormalizer
+        data = json.loads(Path(stats_path).read_text(encoding='utf-8'))
+        if not data.get('source') or not data.get('policy'):
+            raise ValueError('Action statistics require source and policy provenance')
+        fixed = FixedActionNormalizer(data['mean'], data['scale'])
+        state['normalization'] = data
+
+    def load_model(*a, **kw):
+        nonlocal fixed
+        model = native_load(*a, **kw)
+        if hasattr(model, 'set_condition') and hasattr(model, 'action_normalizer'):
+            if condition is None:
+                raise ValueError('Known-condition diagnostic requires --condition-branch old/new')
+            if fixed is not None:
+                raise ValueError('Diagnostic checkpoint already contains fixed action statistics')
+            model.set_condition(condition)
+            fixed = model.action_normalizer
+            state['normalization'] = {
+                'source': model.normalization_source,
+                'mean': fixed.mean.tolist(), 'scale': fixed.scale.tolist(),
+                'embedded_in_checkpoint': True,
+            }
+        elif condition is not None:
+            raise ValueError('condition-branch only applies to the complete-old-path diagnostic')
+        return model
+
+    def make_policy(*a, **kw):
+        if fixed is not None:
+            kw['process'] = {**kw.get('process', {}), 'action': fixed}
+        print('EVAL_MODEL_PROTOCOL ' + json.dumps(state, ensure_ascii=False), flush=True)
+        return native_policy(*a, **kw)
+
+    def restore():
+        swm.wm.utils.load_pretrained = native_load
+        swm.policy.WorldModelPolicy = native_policy
+
+    swm.wm.utils.load_pretrained = load_model
+    swm.policy.WorldModelPolicy = make_policy
+    return restore, state
 
 
 def run_cell(args, task_name):
@@ -78,19 +181,27 @@ def run_cell(args, task_name):
     print(f'[漂移] variation_values={vv}, darken={darken}')
 
     # —— 核心：替换 swm.World，官方脚本随后创建的 World 全部带漂移 ——
+    scene_manifest = getattr(args, 'scene_manifest', None)
+    scene_result = getattr(args, 'scene_result', None)
+    if bool(scene_manifest) != bool(scene_result):
+        raise ValueError('Provide both scene-manifest and scene-result')
     swm.World = functools.partial(
-        DriftWorld,
+        ManifestWorld if scene_manifest else DriftWorld,
+        **(dict(scene_manifest=scene_manifest, scene_result=scene_result) if scene_manifest else {}),
         variation_values=vv,
         image_transform=make_darken(darken),
     )
 
-    # 数据集覆盖（审计用）：--eval-dataset 让初始状态与 goal 图像来自
-    # 另一个数据集（如干净专家集），环境仍按 task 漂移——用于分离
-    # 「goal 图像 off-manifold」与「动力学模型失效」两种悬崖机制
+    # 数据集覆盖同时改变初始状态与目标图像。未固定action-stats时还改变
+    # 动作归一化，不能将其成绩变化直接归因于目标图像这个单一因素。
     eval_dataset = args.eval_dataset or task['dataset']
+    if scene_manifest and json.loads(Path(scene_manifest).read_text())['dataset'] != eval_dataset:
+        raise ValueError('Scene manifest dataset differs from evaluation dataset')
     if eval_dataset != task['dataset']:
         print(f'[审计] 数据集覆盖: {task["dataset"]} -> {eval_dataset}（漂移不变）')
 
+    path = results_file_for(seq, args.policy).resolve()
+    result_offset = path.stat().st_size if path.exists() else 0
     sys.argv = [
         'eval_wm.py',
         '--config-name', seq['eval_config'],
@@ -100,11 +211,21 @@ def run_cell(args, task_name):
         f'seed={args.seed}',
         *(args.extra or []),
     ]
-    runpy.run_path(str(Path(args.eval_wm).resolve()), run_name='__main__')
+    restore, model_protocol = install_model_protocol(args)
+    try:
+        runpy.run_path(str(Path(args.eval_wm).resolve()), run_name='__main__')
+    finally:
+        restore()
 
-    path = results_file_for(seq, args.policy)
-    sr = read_last_success_rate(path)
-    print(f'CELL_RESULT {json.dumps({"task": task_name, "policy": args.policy, "success_rate": sr})}')
+    sr = read_fresh_success_rate(path, result_offset, args, eval_dataset)
+    record = {
+        'task': task_name, 'policy': args.policy, 'success_rate': sr,
+        'dataset': eval_dataset, 'num_eval': args.num_eval, 'seed': args.seed,
+        'variation_values': vv, 'darken': darken,
+        'result_path': str(path), 'result_start_offset': result_offset,
+        'model_protocol': model_protocol,
+    }
+    print(f'CELL_RESULT {json.dumps(record)}', flush=True)
     return sr
 
 
@@ -129,20 +250,43 @@ def run_matrix(args):
             ]
             for kv in (args.extra or []):
                 cmd += ['--extra', kv]
+            if args.eval_dataset is not None:
+                cmd += ['--eval-dataset', args.eval_dataset]
+            if args.condition_branch is not None:
+                cmd += ['--condition-branch', args.condition_branch]
+            if args.action_stats is not None:
+                cmd += ['--action-stats', args.action_stats]
             print(f'\n===== 评估格: {policy} @ {task_name} =====')
-            ret = subprocess.run(cmd).returncode
+            records = []
+            with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  text=True, encoding='utf-8', errors='replace',
+                                  bufsize=1) as process:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    if line.startswith('CELL_RESULT '):
+                        try:
+                            records.append(json.loads(line[len('CELL_RESULT '):]))
+                        except json.JSONDecodeError:
+                            records.append({})
+                ret = process.wait()
             if ret != 0:
                 print(f'[警告] 该格子进程退出码 {ret}，记为 None')
                 matrix[policy][task_name] = None
                 continue
-            try:
-                sr = read_last_success_rate(results_file_for(seq, policy))
-            except Exception as e:
-                print(f'[警告] 结果解析失败: {e}')
+            record = records[0] if len(records) == 1 else {}
+            if (record.get('task') == task_name and record.get('policy') == policy
+                    and record.get('num_eval') == args.num_eval
+                    and record.get('seed') == args.seed
+                    and isinstance(record.get('success_rate'), (int, float))
+                    and 0 <= record['success_rate'] <= 100):
+                sr = record['success_rate']
+            else:
+                print('[警告] 子进程缺少唯一且匹配本格的CELL_RESULT，记为 None')
                 sr = None
             matrix[policy][task_name] = sr
 
-    out = Path(f'forgetting_matrix_{args.sequence}.json').resolve()
+    suffix = f'_{args.condition_branch}' if args.condition_branch else ''
+    out = Path(f'forgetting_matrix_{args.sequence}{suffix}.json').resolve()
     out.write_text(json.dumps(matrix, indent=2, ensure_ascii=False), encoding='utf-8')
 
     # 打印表格（行=评估任务，列=检查点）
@@ -166,7 +310,7 @@ def run_matrix(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tasks', default=str(Path(__file__).parent / 'tasks.yaml'))
-    ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
+    ap.add_argument('--sequence', required=True, choices=None)  # 序列名以 tasks.yaml 为准（A_pusht/B_reacher/C_walker/D_cheetah）
     ap.add_argument('--task', help='单格模式：评估哪个任务（T1/T2/T3 或探针档位）')
     ap.add_argument('--policy', help='单格模式：检查点（checkpoints/ 下的相对路径）')
     ap.add_argument('--matrix', action='store_true', help='矩阵模式')
@@ -181,9 +325,16 @@ def main():
                     help='追加给 eval_wm.py 的 hydra 覆盖，可多次：--extra bf16=true')
     ap.add_argument('--eval-dataset', default=None,
                     help='审计用：覆盖评估数据集（初始状态/goal 来源），环境漂移不变')
+    ap.add_argument('--condition-branch', choices=('old', 'new'),
+                    help='完整旧通路诊断专用：显式给定条件，不是自动识别')
+    ap.add_argument('--action-stats', help='为普通模型固定动作坐标的JSON；诊断模型使用权重内统计')
+    ap.add_argument('--scene-manifest', help='单格：固定留出轨迹起点清单')
+    ap.add_argument('--scene-result', help='单格：保存清单及逐场景成功标记')
     args = ap.parse_args()
 
     if args.matrix:
+        if args.scene_manifest or args.scene_result:
+            ap.error('Explicit scene manifests currently require single-cell mode')
         if not args.policies:
             sys.exit('[拒绝] 矩阵模式需要 --policies')
         run_matrix(args)

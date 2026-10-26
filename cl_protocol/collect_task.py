@@ -44,13 +44,49 @@ def load_task(tasks_path, seq_name, task_name):
     return seq, tasks[task_name]
 
 
-def make_policy(kind, seed):
+class SACPolicy:
+    """加载 SAC 专家策略（expert_policy.zip + vec_normalize.pkl）用于数据采集。
+
+    观测为环境原生状态向量（如 walker 24 维），先经 VecNormalize 归一化
+    （与 SAC 训练时的观测处理完全一致），再确定性预测动作。
+    """
+
+    def __init__(self, model_path, vecnorm_path):
+        from stable_baselines3 import SAC
+        import pickle
+        self.model = SAC.load(model_path)
+        with open(vecnorm_path, 'rb') as f:
+            self.vecnorm = pickle.load(f)
+        self.env = None
+        self.type = 'sac'
+
+    def set_env(self, envs):
+        """World.set_policy 时注册环境句柄（与 BasePolicy 接口对齐）。"""
+        self.env = envs
+
+    def get_action(self, obs, **kwargs):
+        # World 采集循环传入的是 infos 字典（含 pixels/qpos/observation 等），
+        # SAC 训练输入是其中的 observation 状态向量；直接传入向量也兼容。
+        # infos 中的形状为 (num_envs, 1, d)，需压扁成 (num_envs, d)
+        if isinstance(obs, dict):
+            obs = obs['observation']
+        obs = np.asarray(obs).reshape(len(obs), -1)
+        o = self.vecnorm.normalize_obs(obs)
+        action, _ = self.model.predict(o, deterministic=True)
+        return action
+
+
+def make_policy(kind, seed, args=None):
     if kind == 'random':
         return swm.policy.RandomPolicy(seed=seed)
     if kind == 'weak':
         # PushT 官方采集脚本同款弱策略（collect_pusht_fov.py / collect_weak_pusht.py）
         from stable_worldmodel.envs.pusht import WeakPolicy
         return WeakPolicy(dist_constraint=100, seed=seed)
+    if kind == 'sac':
+        assert args is not None and args.sac_policy and args.vecnorm, \
+            'SAC 采集需要 --sac-policy=<expert_policy.zip> --vecnorm=<vec_normalize.pkl>'
+        return SACPolicy(args.sac_policy, args.vecnorm)
     raise ValueError(f'未知采集策略: {kind}')
 
 
@@ -75,13 +111,19 @@ def build_options(task):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tasks', default=str(Path(__file__).parent / 'tasks.yaml'))
-    ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
+    ap.add_argument('--sequence', required=True, choices=None)  # 序列名以 tasks.yaml 为准（A_pusht/B_reacher/C_walker/D_cheetah）
     ap.add_argument('--task', required=True,
                     help='任务名（链任务 T1/T2/T3 或 probe_tasks 里的探针档位）')
     ap.add_argument('--episodes', type=int, default=None, help='覆盖 yaml 里的 collect_episodes')
     ap.add_argument('--seed', type=int, default=3072)
     ap.add_argument('--num-envs', type=int, default=10)
     ap.add_argument('--check', action='store_true', help='只保存探针画面，不采集')
+    ap.add_argument('--collect-policy', default=None,
+                    help='覆盖 yaml 的 collect_policy（random/weak/sac）')
+    ap.add_argument('--sac-policy', default=None,
+                    help='SAC 专家策略路径（expert_policy.zip，配合 --collect-policy sac）')
+    ap.add_argument('--vecnorm', default=None,
+                    help='VecNormalize 统计量路径（vec_normalize.pkl）')
     args = ap.parse_args()
 
     seq, task = load_task(args.tasks, args.sequence, args.task)
@@ -103,7 +145,8 @@ def main():
         max_episode_steps=seq['max_episode_steps'],
         image_transform=image_transform,
     )
-    world.set_policy(make_policy(seq['collect_policy'], args.seed))
+    policy_kind = args.collect_policy or seq['collect_policy']
+    world.set_policy(make_policy(policy_kind, args.seed, args))
 
     if args.check:
         # 探针：reset 后保存 8 个并行环境的首帧，人眼确认漂移生效

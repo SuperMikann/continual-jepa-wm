@@ -65,7 +65,7 @@ def encode_frames(model, dataset, frames_idx, tf, args, device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--tasks-cfg', default=str(Path(__file__).parent / 'tasks.yaml'))
-    ap.add_argument('--sequence', required=True, choices=['A_pusht', 'B_reacher'])
+    ap.add_argument('--sequence', required=True, choices=None)  # 序列名以 tasks.yaml 为准（A_pusht/B_reacher/C_walker/D_cheetah）
     ap.add_argument('--policy-a', required=True, help='链首检查点（如 T1 训完）')
     ap.add_argument('--policy-b', required=True, help='链尾检查点（如 T3 训完）')
     ap.add_argument('--task', default='T1',

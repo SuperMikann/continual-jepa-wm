@@ -1,104 +1,96 @@
-# 持续学习实验协议 · 三件套使用说明
+# 持续学习实验协议
 
-按定稿任务序列（2026-08-04）实现。**所有接口均对照 stable_worldmodel 源码核实**（pip 0.1.1 wheel + 仓库 main 快照），不是猜的。
+模型与安装说明见 [项目 README](../README.md)。当前模型源码统一放在
+`implementation/`；这里负责条件定义、采集、测量与实验编排。
+整理前的完整操作说明已内部保留在 `archive/protocol_notes_before_cleanup.md`。
 
-## 文件清单
+## 核心协议
 
 | 文件 | 作用 |
 |---|---|
-| `tasks.yaml` | 任务定义唯一事实来源（序列 A=PushT 目标/视觉漂移，序列 B=Reacher 动力学漂移） |
-| `drift_world.py` | 漂移注入核心：DriftWorld（每次 reset 自动带 variation_values）+ 暗光变换 |
-| `collect_task.py` | 按任务采集漂移数据（Reacher=RandomPolicy，PushT=WeakPolicy） |
-| `eval_task.py` | 把漂移注入官方 eval_wm.py（不改它一行代码），单格/矩阵两种模式 |
-| `pred_error.py` | 留出轨迹潜空间预测误差（成功率之外的第二个遗忘度量） |
+| `tasks.yaml` | PushT、Reacher 密度及其他历史序列的任务定义 |
+| `drift_world.py` | reset 时注入条件变化、图像暗化 |
+| `collect_task.py` | 按任务采集，保存实际变化参数 |
+| `eval_task.py` | 复用原生 eval_wm；单格、矩阵、固定统计与指定场景 |
+| `pred_error.py` | 轨迹窗口潜空间预测误差 |
+| `drift_trigger.py` | 离线误差比、校准和验证，不自动训练 |
 
-把这 6 个文件一起上传到服务器仓库根目录旁的同一文件夹（如 `~/cl_protocol/`）。
-
-## 前置条件
+## 运行环境
 
 ```bash
-# DMC（Reacher）必备环境变量，采集/评估通用
+cd /root/autodl-tmp/stable-worldmodel
 export STABLEWM_HOME=/root/autodl-tmp/.stable_worldmodel
-export MUJOCO_GL=osmesa          # collect_task.py 已内置此行，这里再设一层保险
+export MUJOCO_GL=osmesa
 export PYOPENGL_PLATFORM=osmesa
 export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
-
-cd /root/autodl-tmp/stable-worldmodel   # eval_task.py 默认在此找 scripts/plan/eval_wm.py
 ```
 
-## 第 0 步：先验证注入机制无副作用（重要）
+检查点、数据和统计文件必须实际存在。动作统计 JSON 包含对应检查点名
+`policy`、来源 `source`、逐维 `mean` 和正的标准化分母 `scale`，来自模型实际预处理。
+
+## PushT
+
+入口为 `test/run_pusht_experiments.py`：
+
+- `test/pusht/training.py`：训练配置、普通/差分、调度与结构对照。
+- `test/pusht/diagnostics.py`：一步/多步、候选排序和真实历史的评估检查。
+- `test/pusht/adapters.py`：同底座的普通微调、均匀适配器、修正门控三组对照。
 
 ```bash
-python ~/cl_protocol/eval_task.py --sequence B_reacher --task T1 \
-    --policy lewm_reacher/weights_epoch_30.pt --num-eval 50
+python cl_protocol/test/run_pusht_experiments.py --help
+# 以下为长训练示例；需已安装代码、实际T1检查点及两套数据：
+python -u cl_protocol/test/run_pusht_experiments.py \
+  --mode adapter-t2 --base-policy m2_t1/weights_epoch_30.pt \
+  --epochs 30 --num-eval 100 --tag NEW_RUN_NAME
 ```
 
-期望复现 **~84%**（与已有 `dmc_results.txt` 一致）。一致 → DriftWorld 对默认任务是透明的，后续所有漂移评估可信。不一致 → 停下来排查，先别往下跑。
+三组对照固定原 T1 动作统计，门控单独启用因果版本及正熵损失；不默认改变图像
+投影或开启差分/锚点附加损失。该项测固定容量适配器和门控，初始化/两更新短检
+通过后才正式训练。完整旧通路冻结和自动条件识别分别验证。
+旧入口 `test/run_pusht_v2_smoke.py` 的模式和参数继续有效。
 
-## 第 1 步：采集漂移数据（T2/T3）
+## Reacher 阻尼与其他动力学条件
+
+入口为 `test/run_reacher_experiments.py`：
+
+- `test/reacher/common.py`：固定条件参数、配置、结果校验及配对比较。
+- `test/reacher/evaluation.py`：物理参数注入、原生闭环与预测评估。
+- `test/reacher/training.py`：采集、回放数据类和训练接入。
+- `test/reacher/pipeline.py`：固定预算筛查、T2适应/对照和T3队列。
 
 ```bash
-# 先探针：只保存 8 帧画面，人眼确认漂移生效（目标位置/暗光/方块颜色/密度）
-python ~/cl_protocol/collect_task.py --sequence B_reacher --task T2 --check
-python ~/cl_protocol/collect_task.py --sequence A_pusht --task T2 --check
-python ~/cl_protocol/collect_task.py --sequence A_pusht --task T3 --check
-
-# 确认后正式采集（铁律已内置：输出路径存在即拒绝运行）
-python ~/cl_protocol/collect_task.py --sequence B_reacher --task T2
-python ~/cl_protocol/collect_task.py --sequence B_reacher --task T3
-python ~/cl_protocol/collect_task.py --sequence A_pusht --task T2
-python ~/cl_protocol/collect_task.py --sequence A_pusht --task T3
+python cl_protocol/test/run_reacher_experiments.py --help
 ```
 
-每个任务 500 条（`tasks.yaml` 里 `collect_episodes` 可调）。采集时漂移键的实际值会以 `variation.<key>` 列写进数据集，随时可审计。
+模式为 `screen/adapt/compare/stage3/collect/train/prediction`，预算和阶段停止条件
+延续原配置。回放数据类位于可导入模块，支持多进程数据加载。
+worker 对原生入口的内存包装仍用于注入条件及记录预算，退出时恢复，不改写平台
+源码。旧入口 `test/reacher_dynamics_screen.py` 继续有效。
 
-## 第 2 步：zero-shot 标定（免费基线，先跑这个）
-
-T1 种子直接在各漂移任务上评估，不训练：
+## 评估与检测
 
 ```bash
-python ~/cl_protocol/eval_task.py --sequence B_reacher --matrix \
-    --policies lewm_reacher/weights_epoch_30.pt
-# PushT 同理（T1 种子是 pusht_seed_epoch_30.pt）
+python cl_protocol/eval_task.py --help
+python cl_protocol/drift_trigger.py --help
 ```
 
-这给出遗忘矩阵的第一行，也是"漂移强度是否合适"的判据：**T2/T3 成功率应掉到 ≤70% 左右但不归零**。全绿说明漂移太弱（改 tasks.yaml 加大强度），全零说明太强。
+评估比较同一批起点、物理目标、规划预算和动作统计。
+`--eval-dataset` 会改变起点及目标来源，不能单独解释为只换目标画面。
+`pred_error.py` 默认保留历史逐任务标准化；跨条件检测使用
+`drift_trigger.py --action-stats ACTUAL_STATS.json` 固定动作坐标。
+`threshold_calibrated` 表示执行了校准，不保证验证误报率达标。
 
-## 第 3 步：顺序微调 + 遗忘矩阵
+`scheme_eval.py` 与 `walker_stand_probe.py` 是保留的早期诊断入口。
+物理候选时序对齐使用 `test/aligned_scheme_eval.py`；Walker/Cheetah 原生回报
+使用 `test/eval_locomotion.py`。这些测量与闭环持续学习方法对照分别解释。
 
-每个任务用已有命令模板训练（注意 `output_model_name` 区分、`data.dataset.name` 带 `.lance` 后缀）：
+## 检查和进度
 
 ```bash
-python scripts/train/lewm.py data=dmc \
-    data.dataset.name=dmc/reacher_t2.lance \
-    output_model_name=lewm_reacher_t2 trainer.max_epochs=10
+python -m unittest discover -s cl_protocol/test -p 'test_*.py' -v
+tail -n 30 -F logs/ACTUAL_RUN_NAME.log
 ```
 
-每训完一个任务，把它加进矩阵：
-
-```bash
-python ~/cl_protocol/eval_task.py --sequence B_reacher --matrix \
-    --policies lewm_reacher/weights_epoch_30.pt lewm_reacher_t2/weights_epoch_10.pt
-```
-
-产物：`forgetting_matrix_<sequence>.json` + 终端表格。每格同时写进各检查点目录的 `dmc_results.txt` / `pusht_results.txt`（官方格式）。
-
-## 第 4 步：预测误差遗忘度量
-
-```bash
-python ~/cl_protocol/pred_error.py --sequence B_reacher \
-    --policy lewm_reacher/weights_epoch_30.pt
-python ~/cl_protocol/pred_error.py --sequence B_reacher \
-    --policy lewm_reacher_t2/weights_epoch_10.pt
-```
-
-产物：`pred_error_<sequence>_<policy>.json`。与成功率矩阵互补：成功率看"还能不能完成任务"，预测误差看"世界模型本身忘了多少"。
-
-## 注意事项（都是定稿时确认过的决策）
-
-1. **T3 手臂密度 500 恰在 variation 空间下限**。平台用 `contains()` 做边界检查（含端点），理论上可行；万一报错就把 `tasks.yaml` 里改成 `[505.0]`。
-2. **PushT T2/T3 用 WeakPolicy 采集，T1 是官方专家数据**——策略分布不同是个已知混淆项。缓解：评估协议对全序列统一（数据集定义的起点/目标 + CEM 规划），策略只影响数据覆盖度；论文里在实验设置一节如实写明即可。
-3. **T1 的留出 200 条参与过训练**，预测误差绝对值偏乐观；跨任务/跨检查点的差值仍然有效。正式跑建议每任务多采 200 条专用测试集。
-4. **暗光漂移的实现**：PushT 没有光照 variation 因子，用 `World(image_transform=...)` 在渲染像素上缩放亮度实现（对齐 AdaJEPA 的 dark lighting）。采集时变换生效 → 数据集里就是暗图 → 评估时目标图与环境图同为暗图，分布一致。
-5. **评估为何必须走 DriftWorld**：平台的 variation_space 每次 reset 都先恢复默认值，官方 eval_wm.py 的 reset 不传 options——不打这个补丁，所谓"T2 评估"实际上是在默认任务上评的。这是整套协议里最关键的一个坑。
-6. 评估结果文件是 append 模式，eval_task.py 总是读**最后一次**运行的结果，重复跑不会串。
+输出目录已存在时使用新的实验名称，保留历史回执。
+`test/growth_check.py` 检查模型机制和兼容性；数据采集工具和早期规划保持诊断
+保留原入口，未纳入自动执行队列。完整旧通路诊断的 old/new 条件选择须显式指定。
